@@ -1,0 +1,8 @@
+{
+  "encode_len": 6,
+  "activation": "relu",
+  "max_epochs": 30,
+  "lr": 1e-3,
+  "batch_size": 64,
+  "random_state": 42
+}
