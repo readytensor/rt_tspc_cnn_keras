@@ -1,7 +1,5 @@
 import joblib
 from typing import Tuple
-from preprocessing.custom_transformers import PADDING_VALUE
-from schema.data_schema import TSAnnotationSchema
 from sklearn.metrics import f1_score
 from multiprocessing import cpu_count
 from sklearn.exceptions import NotFittedError
@@ -10,6 +8,7 @@ from keras import optimizers
 from keras import losses
 from keras import layers
 from keras import Sequential
+from schema.data_schema import TimeStepClassificationSchema
 import keras
 import tensorflow as tf
 import numpy as np
@@ -42,19 +41,20 @@ def control_randomness(seed: int = 42):
     tf.random.set_seed(seed)
 
 
-class TSAnnotator:
-    """CNN Timeseries Annotator.
+class TimeStepClassifier:
+    """CNN TimeStepClassifier.
 
     This class provides a consistent interface that can be used with other
-    TSAnnotator models.
+    TimeStepClassifier models.
     """
 
-    MODEL_NAME = "CNN_Timeseries_Annotator"
+    MODEL_NAME = "CNN_TimeStepClassifier"
 
     def __init__(
         self,
-        data_schema: TSAnnotationSchema,
+        data_schema: TimeStepClassificationSchema,
         encode_len: int,
+        padding_value: float,
         activation: str = "relu",
         lr: float = 1e-3,
         max_epochs: int = 100,
@@ -63,11 +63,12 @@ class TSAnnotator:
         **kwargs,
     ):
         """
-        Construct a new CNN TSAnnotator.
+        Construct a new CNN TimeStepClassifier.
 
         Args:
-            data_schema (TSAnnotationSchema): The data schema.
+            data_schema (TimeStepClassificationSchema): The data schema.
             encode_len (int): The length of the window sample.
+            padding_value (float): The padding value.
             activation (str): The activation function.
             lr (float): The learning rate.
             max_epochs (int): The maximum number of epochs.
@@ -76,6 +77,7 @@ class TSAnnotator:
         """
         self.data_schema = data_schema
         self.encode_len = int(encode_len)
+        self.padding_value = padding_value
         self.activation = activation
         self.lr = lr
         self.max_epochs = max_epochs
@@ -88,7 +90,7 @@ class TSAnnotator:
         control_randomness(self.random_state)
 
     def build_NNet_model(self):
-        model = Sequential(name="CNN_Timeseries_Annotator")
+        model = Sequential(name="CNN_TimeStepClassifier")
 
 
         model.add(layers.Conv1D(
@@ -137,7 +139,7 @@ class TSAnnotator:
                 )
             X = data[:, :, 2:]
             y = data[:, :, 0:2]
-        return X, y
+        return np.float64(X), y
 
     def fit(self, train_data):
         train_X, train_y = self._get_X_and_y(train_data, is_train=True)
@@ -161,9 +163,6 @@ class TSAnnotator:
 
         X, window_ids = self._get_X_and_y(data, is_train=False)
         preds = self.net.predict(X)
-        for i in range(len(preds)):
-            if preds[i].shape[1] > len(self.data_schema.target_classes):
-                preds[i] = preds[i][:, :-1]
         preds = np.array(preds)
         prob_dict = {}
 
@@ -177,11 +176,11 @@ class TSAnnotator:
         prob_dict = {
             k: np.mean(np.array(v), axis=0)
             for k, v in prob_dict.items()
-            if k[1] != PADDING_VALUE
+            if k[1] != self.padding_value
         }
 
         sorted_dict = {key: prob_dict[key] for key in sorted(prob_dict.keys())}
-        probabilities = np.vstack(sorted_dict.values())
+        probabilities = np.vstack(list(sorted_dict.values()))
         return probabilities
 
     def evaluate(self, test_data):
@@ -196,7 +195,7 @@ class TSAnnotator:
         raise NotFittedError("Model is not fitted yet.")
 
     def save(self, model_dir_path: str) -> None:
-        """Save the CNN TSAnnotator to disk.
+        """Save the CNN TimeStepClassifier to disk.
 
         Args:
             model_dir_path (str): Dir path to which to save the model.
@@ -209,13 +208,13 @@ class TSAnnotator:
         joblib.dump(self, os.path.join(model_dir_path, PREDICTOR_FILE_NAME))
 
     @classmethod
-    def load(cls, model_dir_path: str) -> "TSAnnotator":
-        """Load the CNN TSAnnotator from disk.
+    def load(cls, model_dir_path: str) -> "TimeStepClassifier":
+        """Load the CNN TimeStepClassifier from disk.
 
         Args:
             model_dir_path (str): Dir path to the saved model.
         Returns:
-            TSAnnotator: A new instance of the loaded CNN TSAnnotator.
+            TimeStepClassifier: A new instance of the loaded CNN TimeStepClassifier.
         """
         model = joblib.load(os.path.join(model_dir_path, PREDICTOR_FILE_NAME))
         model.net = keras.saving.load_model(os.path.join(
@@ -225,34 +224,38 @@ class TSAnnotator:
 
 def train_predictor_model(
     train_data: np.ndarray,
-    data_schema: TSAnnotationSchema,
+    data_schema: TimeStepClassificationSchema,
     hyperparameters: dict,
-) -> TSAnnotator:
+    padding_value: float,
+) -> TimeStepClassifier:
     """
-    Instantiate and train the TSAnnotator model.
+    Instantiate and train the TimeStepClassifier model.
 
     Args:
         train_data (np.ndarray): The train split from training data.
-        hyperparameters (dict): Hyperparameters for the TSAnnotator.
+        data_schema (TimeStepClassificationSchema): The data schema.
+        hyperparameters (dict): Hyperparameters for the TimeStepClassifier.
+        padding_value (float): The padding value.
 
     Returns:
-        'TSAnnotator': The TSAnnotator model
+        'TimeStepClassifier': The TimeStepClassifier model
     """
-    model = TSAnnotator(
+    model = TimeStepClassifier(
         data_schema=data_schema,
+        padding_value=padding_value,
         **hyperparameters,
     )
     model.fit(train_data=train_data)
     return model
 
 
-def predict_with_model(model: TSAnnotator, test_data: np.ndarray) -> np.ndarray:
+def predict_with_model(model: TimeStepClassifier, test_data: np.ndarray) -> np.ndarray:
     """
     Make forecast.
 
     Args:
-        model (TSAnnotator): The TSAnnotator model.
-        test_data (np.ndarray): The test input data for annotation.
+        model (TimeStepClassifier): The TimeStepClassifier model.
+        test_data (np.ndarray): The test input data for Classifier.
 
     Returns:
         np.ndarray: The annotated data.
@@ -260,12 +263,12 @@ def predict_with_model(model: TSAnnotator, test_data: np.ndarray) -> np.ndarray:
     return model.predict(test_data)
 
 
-def save_predictor_model(model: TSAnnotator, predictor_dir_path: str) -> None:
+def save_predictor_model(model: TimeStepClassifier, predictor_dir_path: str) -> None:
     """
-    Save the TSAnnotator model to disk.
+    Save the TimeStepClassifier model to disk.
 
     Args:
-        model (TSAnnotator): The TSAnnotator model to save.
+        model (TimeStepClassifier): The TimeStepClassifier model to save.
         predictor_dir_path (str): Dir path to which to save the model.
     """
     if not os.path.exists(predictor_dir_path):
@@ -273,28 +276,28 @@ def save_predictor_model(model: TSAnnotator, predictor_dir_path: str) -> None:
     model.save(predictor_dir_path)
 
 
-def load_predictor_model(predictor_dir_path: str) -> TSAnnotator:
+def load_predictor_model(predictor_dir_path: str) -> TimeStepClassifier:
     """
-    Load the TSAnnotator model from disk.
+    Load the TimeStepClassifier model from disk.
 
     Args:
         predictor_dir_path (str): Dir path where model is saved.
 
     Returns:
-        TSAnnotator: A new instance of the loaded TSAnnotator model.
+        TimeStepClassifier: A new instance of the loaded TimeStepClassifier model.
     """
-    return TSAnnotator.load(predictor_dir_path)
+    return TimeStepClassifier.load(predictor_dir_path)
 
 
-def evaluate_predictor_model(model: TSAnnotator, test_split: np.ndarray) -> float:
+def evaluate_predictor_model(model: TimeStepClassifier, test_split: np.ndarray) -> float:
     """
-    Evaluate the TSAnnotator model and return the r-squared value.
+    Evaluate the TimeStepClassifier model and return the r-squared value.
 
     Args:
-        model (TSAnnotator): The TSAnnotator model.
+        model (TimeStepClassifier): The TimeStepClassifier model.
         test_split (np.ndarray): Test data.
 
     Returns:
-        float: The r-squared value of the TSAnnotator model.
+        float: The r-squared value of the TimeStepClassifier model.
     """
     return model.evaluate(test_split)
